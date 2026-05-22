@@ -4,7 +4,7 @@ from PIL import Image
 # ゲームを起動した状態で実行してください
 with mss.mss() as sct:
     # 左上の広めの領域をキャプチャ
-    region = {"top": 60, "left": 0, "width": 450, "height": 40}
+    region = {"top": 73, "left": 0, "width": 450, "height": 30}
     screenshot = sct.grab(region)
     img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
     img.save("calibrate_check.png")

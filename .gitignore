@@ -46,7 +46,7 @@ desktop.ini
 *.jpg
 *.jpeg
 *.bmp
-calibrate_check.png
+*.lss
 
 # Temporary files
 *.tmp
