@@ -28,9 +28,18 @@ DEBUG_SAVE_OCR_IMAGE = True
 def send_livesplit(command: str):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1.0)  # 1秒のタイムアウト設定
             s.connect((LIVESPLIT_HOST, LIVESPLIT_PORT))
             s.sendall((command + "\r\n").encode())
-            print(f"  → LiveSplit送信: {command}")
+            # レスポンスはオプショナル（タイムアウトする場合あり）
+            try:
+                response = s.recv(1024).decode().strip()
+                if response:
+                    print(f"  → LiveSplit送信: {command} | 応答: {response}")
+                else:
+                    print(f"  → LiveSplit送信: {command}")
+            except socket.timeout:
+                print(f"  → LiveSplit送信: {command} (応答なし)")
     except Exception as e:
         print(f"[LiveSplit接続エラー] {e}")
 
@@ -90,10 +99,21 @@ def get_game_state(sct, last_split_level: int = 0) -> tuple[int, int] | None:
     # スコア部分もオプショナル
     match2 = re.search(r'(\d{1,2})\s*\|(?:\s*(\d+))?', text)
     if match2:
-        level = int(match2.group(1))
+        level_str = match2.group(1)
         score = int(match2.group(2)) if match2.group(2) else 0
+        
+        # まず通常のレベルとして試す
+        level = int(level_str)
         if 1 <= level <= MAX_LEVEL + 2:
             return (level, score)
+        
+        # 範囲外の2桁数字の場合、下1桁をレベルとして試す（@との癒着対策）
+        # 例: "45" → "5" (@ と 5 が癒着して 45 と認識された場合)
+        if len(level_str) == 2:
+            level = int(level_str[1])  # 下1桁
+            if 1 <= level <= MAX_LEVEL + 2:
+                print(f"  → 癒着修正: '{level_str}' → Level={level}, Score={score}")
+                return (level, score)
 
     # ★ 最終フォールバック: "| 数字" または "|" のみ → Level1と仮定
     # @とレベル番号が認識できない場合の救済措置
@@ -108,12 +128,21 @@ def get_game_state(sct, last_split_level: int = 0) -> tuple[int, int] | None:
 
     return None
 
-def do_start(last_split_level):
+def do_start(last_split_level, current_level=1):
+    """タイマーをリセットして開始
+    
+    Args:
+        last_split_level: 現在のスプリットレベル
+        current_level: 開始時のレベル（デフォルト：1）
+    
+    Returns:
+        int: 新しいlast_split_level
+    """
     print("[ACTION] タイマー開始")
     send_livesplit("reset")
     time.sleep(0.1)
     send_livesplit("starttimer")
-    return 1  # last_split_level を 1 に
+    return current_level  # 現在のレベルを返す
 
 def main():
     print("=== Pogostuck Loot Mode オートスプリッター起動 ===")
@@ -154,9 +183,9 @@ def main():
                 print(f"[確定] レベル: {prev_level} → {confirmed_level}, スコア: {prev_score} → {confirmed_score}")
 
                 # ── ゲーム開始（初回）──
-                # Level1, Score0 の時のみ初回起動と判断
-                if confirmed_level == 1 and confirmed_score == 0 and last_split_level == 0:
-                    last_split_level = do_start(last_split_level)
+                # last_split_level == 0 の時は初回起動と判断（どのレベルから始まってもOK）
+                if last_split_level == 0:
+                    last_split_level = do_start(last_split_level, confirmed_level)
                     last_confirmed_score = confirmed_score
 
                 # ── リセット検知1: Level1に戻ってきた ──
