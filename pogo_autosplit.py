@@ -10,7 +10,8 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 # @ の後の数字が表示されている領域（座標はキャリブレーション後に調整）
 # top, left はウィンドウタイトルバー含む絶対座標
-CAPTURE_REGION = {"top": 73, "left": 245, "width": 250, "height": 30}
+# width, height を広げてスコア部分も確実にキャプチャ（画面の上下動対策）
+CAPTURE_REGION = {"top": 73, "left": 245, "width": 350, "height": 50}
 
 # LiveSplit Server設定
 LIVESPLIT_HOST = "localhost"
@@ -18,6 +19,9 @@ LIVESPLIT_PORT = 16834
 
 MAX_LEVEL = 10    # 監視するレベル範囲
 STABLE_COUNT = 2  # 同じ値がN回連続で出たら確定（誤認識フィルタ）
+
+# デバッグ用：OCR前処理画像を保存する（True で debug_ocr.png に保存）
+DEBUG_SAVE_OCR_IMAGE = True
 
 # ===========================
 
@@ -30,21 +34,40 @@ def send_livesplit(command: str):
     except Exception as e:
         print(f"[LiveSplit接続エラー] {e}")
 
-def get_current_level(sct) -> int | None:
+def get_game_state(sct, last_split_level: int = 0) -> tuple[int, int] | None:
+    """ゲームの現在の状態（レベルとスコア）を取得
+    
+    Args:
+        sct: mssのスクリーンショットオブジェクト
+        last_split_level: 現在のスプリットレベル（フォールバック制限用）
+    
+    Returns:
+        tuple[int, int] | None: (level, score) のタプル、取得失敗時は None
+    """
     screenshot = sct.grab(CAPTURE_REGION)
     img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
 
     # ★ 黄色テキストだけを白に、それ以外を黒にマスク
     import numpy as np
     arr = np.array(img)
-    # ゲームUIの黄色: R>180, G>150, B<80
-    yellow_mask = (arr[:,:,0] > 180) & (arr[:,:,1] > 150) & (arr[:,:,2] < 80)
+    # ゲームUIの黄色: バランス調整（テキストを残しつつ背景ノイズを除外）
+    # 黄色 = R高, G高, B低 かつ R-B差が大きい
+    yellow_mask = (
+        (arr[:,:,0] > 190) &  # R > 190
+        (arr[:,:,1] > 170) &  # G > 170
+        (arr[:,:,2] < 70) &   # B < 70
+        ((arr[:,:,0] - arr[:,:,2]) > 140)  # R-B差が大きい（黄色の特徴）
+    )
     masked = np.zeros_like(arr)
     masked[yellow_mask] = [255, 255, 255]  # 黄色 → 白
     img = Image.fromarray(masked.astype(np.uint8), 'RGB')
 
     # 拡大してOCR精度UP
     img = img.resize((img.width * 3, img.height * 3), Image.NEAREST)
+
+    # デバッグ用：OCR前の画像を保存
+    if DEBUG_SAVE_OCR_IMAGE:
+        img.save("debug_ocr.png")
 
     text = pytesseract.image_to_string(
         img,
@@ -53,20 +76,35 @@ def get_current_level(sct) -> int | None:
 
     print(f"[OCR raw] '{text.strip()}'")
 
-    # ★ @ あり: "@ 1 |"
-    match = re.search(r'@\s*(\d{1,2})\s*\|', text)
+    # ★ @ あり: "@ 1 | 0" の形式でレベルとスコアを抽出
+    # スコア部分はオプショナル（認識できない場合は0として扱う）
+    match = re.search(r'@\s*(\d{1,2})\s*\|(?:\s*(\d+))?', text)
     if match:
         level = int(match.group(1))
+        score = int(match.group(2)) if match.group(2) else 0
         if 1 <= level <= MAX_LEVEL + 2:
-            return level
+            return (level, score)
 
-    # ★ @ なし fallback: "数字 | 数字" の最初の1〜2桁
+    # ★ @ なし fallback: "数字 | 数字" の形式
     # ただし行頭の "1)" の "1" を拾わないよう | の直前を優先
-    match2 = re.search(r'(\d{1,2})\s*\|\s*\d', text)
+    # スコア部分もオプショナル
+    match2 = re.search(r'(\d{1,2})\s*\|(?:\s*(\d+))?', text)
     if match2:
         level = int(match2.group(1))
+        score = int(match2.group(2)) if match2.group(2) else 0
         if 1 <= level <= MAX_LEVEL + 2:
-            return level
+            return (level, score)
+
+    # ★ 最終フォールバック: "| 数字" または "|" のみ → Level1と仮定
+    # @とレベル番号が認識できない場合の救済措置
+    # 誤判定防止: Level1付近(last_split_level <= 1)でのみ使用
+    if last_split_level <= 1:
+        match3 = re.search(r'\|\s*(\d+)?', text)
+        if match3:
+            level = 1  # Level1と仮定
+            score = int(match3.group(1)) if match3.group(1) else 0
+            print(f"  → フォールバック: Level={level}(仮定), Score={score}")
+            return (level, score)
 
     return None
 
@@ -81,54 +119,76 @@ def main():
     print("=== Pogostuck Loot Mode オートスプリッター起動 ===")
     print("LiveSplitを起動してTCP Serverを開始してください。")
     print("ゲームを開始したら自動でスプリットが始まります。")
+    print("スコア0検知によるLevel1中のリセットも検知します。")
     print("Ctrl+C で終了\n")
 
     confirmed_level = None
-    candidate_level = None
+    confirmed_score = None
+    candidate_state = None  # (level, score) のタプル
     candidate_count = 0
     last_split_level = 0
+    last_confirmed_score = 0
 
     with mss.MSS() as sct:
         while True:
-            raw = get_current_level(sct)
+            raw_state = get_game_state(sct, last_split_level)
 
             # ★ None は無視（揺れの原因なのでスキップ）
-            if raw is None:
+            if raw_state is None:
                 time.sleep(0.5)
                 continue
 
+            raw_level, raw_score = raw_state
+
             # --- 安定化フィルタ ---
-            if raw == candidate_level:
+            if raw_state == candidate_state:
                 candidate_count += 1
             else:
-                candidate_level = raw
+                candidate_state = raw_state
                 candidate_count = 1
 
-            if candidate_count >= STABLE_COUNT and candidate_level != confirmed_level:
-                prev = confirmed_level
-                confirmed_level = candidate_level
-                print(f"[確定] レベル: {prev} → {confirmed_level}")
+            if candidate_count >= STABLE_COUNT and candidate_state != (confirmed_level, confirmed_score):
+                prev_level = confirmed_level
+                prev_score = confirmed_score
+                confirmed_level, confirmed_score = candidate_state
+                print(f"[確定] レベル: {prev_level} → {confirmed_level}, スコア: {prev_score} → {confirmed_score}")
 
                 # ── ゲーム開始（初回）──
-                if confirmed_level == 1 and last_split_level == 0:
+                # Level1, Score0 の時のみ初回起動と判断
+                if confirmed_level == 1 and confirmed_score == 0 and last_split_level == 0:
                     last_split_level = do_start(last_split_level)
+                    last_confirmed_score = confirmed_score
 
-                # ── リセット検知：Level1に戻ってきた ──
+                # ── リセット検知1: Level1に戻ってきた ──
                 elif confirmed_level == 1 and last_split_level > 1:
-                    print("[ACTION] リセット検知 → タイマーリセット＆再スタート")
+                    print("[ACTION] リセット検知（Level変化） → タイマーリセット＆再スタート")
                     last_split_level = do_start(last_split_level)
+                    last_confirmed_score = confirmed_score
+
+                # ── リセット検知2: スコアが0に戻った（Level1中のリセット）──
+                elif (confirmed_score == 0 and last_confirmed_score > 0 and 
+                      confirmed_level == 1 and last_split_level >= 1):
+                    print("[ACTION] リセット検知（スコア0） → タイマーリセット＆再スタート")
+                    last_split_level = do_start(last_split_level)
+                    last_confirmed_score = confirmed_score
 
                 # ── レベルアップ → Split ──
                 elif confirmed_level > last_split_level and 1 < confirmed_level <= MAX_LEVEL:
                     print(f"[ACTION] Split! Level {last_split_level} → {confirmed_level}")
                     send_livesplit("split")
                     last_split_level = confirmed_level
+                    last_confirmed_score = confirmed_score
 
                 # ── MAX_LEVEL 到達 → 最終Split ──
                 elif confirmed_level > MAX_LEVEL and last_split_level == MAX_LEVEL:
                     print("[ACTION] 最終Split！")
                     send_livesplit("split")
                     last_split_level = confirmed_level
+                    last_confirmed_score = confirmed_score
+
+                # ── その他の状態変化時もスコアを更新 ──
+                else:
+                    last_confirmed_score = confirmed_score
 
             time.sleep(0.5)
 
