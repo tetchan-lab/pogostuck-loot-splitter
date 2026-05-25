@@ -54,11 +54,15 @@ pip install mss pytesseract Pillow numpy
 
 | 設定 | 手順 |
 |---|---|
-| LiveSplit Server の追加 | `Edit Layout` → `+` → `Control` → `LiveSplit Server` |
-| TCP Server の起動 | LiveSplit を右クリック → `Control` → `Start TCP Server` |
+| LiveSplit Server の追加 | 最新版はデフォルトで入っている |
+| TCP Server の起動 | LiveSplit を右クリック → `Settings` → `Startup Behavior` で `Start TCP Server` を選択 |
 | ポート | デフォルト `16834`（スクリプトの `LIVESPLIT_PORT` と合わせること） |
 
 付属の `.lsl` / `.lss` ファイルを読み込むと、レイアウトとスプリット設定が即座に利用できます。
+
+> ※1 .lss スプリットファイルは **Lvel1～20** で設定してあります。  
+> ※2 .lsl レイアウトファイルはOBSの配信上に乗せるため、背景をマゼンダにしてあり、更に透過してあります。  
+> お好みで設定を変更してください。
 
 ## セットアップ手順
 
