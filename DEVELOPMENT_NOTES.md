@@ -1,4 +1,4 @@
-## 引き継ぎ内容：Pogostuck Loot Mode オートスプリッター
+## 初期仕様：Pogostuck Loot Mode オートスプリッター
 
 ### 背景
 - ゲーム：Pogostuck（3D Gamestudio A8製、PC版）

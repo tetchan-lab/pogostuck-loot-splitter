@@ -20,7 +20,7 @@ CAPTURE_REGION = {"top": 73, "left": 245, "width": 350, "height": 150}
 LIVESPLIT_HOST = "localhost"
 LIVESPLIT_PORT = 16834
 
-MAX_LEVEL = 10    # 監視するレベル範囲
+MAX_LEVEL = 20    # 監視するレベル範囲
 STABLE_COUNT = 2  # 同じ値がN回連続で出たら確定（誤認識フィルタ）
 
 # デバッグ用：OCR前処理画像を保存する（True で debug_ocr.png に保存）

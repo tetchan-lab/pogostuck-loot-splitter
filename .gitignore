@@ -46,8 +46,6 @@ desktop.ini
 *.jpg
 *.jpeg
 *.bmp
-*.lss
-*.lsl
 
 # Temporary files
 *.tmp
